@@ -146,7 +146,7 @@ def lp(x, x_adv):
     return [(_snr_min(x_i, x_adv_i)) for (x_i, x_adv_i) in zip(x, x_adv)] 
 
 
-def sliding_snr(x, x_adv):
+def sliding_snr_db(x, x_adv):
     """
     Return the L0 'norm' over a batch of inputs as a float,
     normalized by the number of elements in the array
@@ -952,7 +952,7 @@ SUPPORTED_METRICS = {
     "linf": linf,
     "snr": snr,
     "snr_db": snr_db,
-    "window_snr": sliding_snr,
+    "window_snr_db": sliding_snr,
     "snr_spectrogram": snr_spectrogram,
     "snr_spectrogram_db": snr_spectrogram_db,
     "image_circle_patch_diameter": image_circle_patch_diameter,
