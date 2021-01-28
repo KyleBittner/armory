@@ -222,6 +222,7 @@
                 "linf",
                 "snr",
                 "snr_db",
+                "window_snr_db"
                 "snr_spectrogram",
                 "snr_spectrogram_db",
                 "image_circle_patch_diameter",
