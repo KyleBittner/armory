@@ -8,10 +8,14 @@ Outputs are lists of python variables amenable to JSON serialization:
 
 import logging
 import numpy as np
+import pandas as pd
+from .slider import Slider
 import time
 from contextlib import contextmanager
 import io
 from collections import defaultdict, Counter
+import codecs, json 
+
 
 import cProfile
 import pstats
@@ -22,7 +26,13 @@ from armory.data.adversarial.apricot_metadata import APRICOT_PATCHES
 
 logger = logging.getLogger(__name__)
 
-
+def l0(x, x_adv):
+    """
+    Return the L0 'norm' over a batch of inputs as a float,
+    normalized by the number of elements in the array
+    """
+    return norm(x, x_adv, 0)
+    
 def categorical_accuracy(y, y_pred):
     """
     Return the categorical accuracy of the predictions
@@ -48,6 +58,20 @@ def top_5_categorical_accuracy(y, y_pred):
     Return the top 5 categorical accuracy of the predictions
     """
     return top_n_categorical_accuracy(y, y_pred, 5)
+
+
+
+
+
+def _snr_spectrogram(x_i, x_adv_i):
+    x_i = np.asarray(x_i, dtype=float)
+    x_adv_i = np.asarray(x_adv_i, dtype=float)
+    if x_i.shape != x_adv_i.shape:
+        raise ValueError(f"x_i.shape {x_i.shape} != x_adv_i.shape {x_adv_i.shape}")
+    signal_power = np.abs(x_i).mean()
+    noise_power = np.abs(x_i - x_adv_i).mean()
+    return signal_power / noise_power
+
 
 
 def top_n_categorical_accuracy(y, y_pred, n):
@@ -112,24 +136,22 @@ def l1(x, x_adv):
     """
     Return the L1 norm over a batch of inputs as a float
     """
-    return norm(x, x_adv, 1)
+    return [(_snr_slider(x_i, x_adv_i)) for (x_i, x_adv_i) in zip(x, x_adv)] 
 
 
-def lp(x, x_adv, p):
+def lp(x, x_adv):
     """
     Return the Lp norm over a batch of inputs as a float
     """
-    if p <= 0:
-        raise ValueError(f"p must be positive, not {p}")
-    return norm(x, x_adv, p)
+    return [(_snr_min(x_i, x_adv_i)) for (x_i, x_adv_i) in zip(x, x_adv)] 
 
 
-def l0(x, x_adv):
+def sliding_snr(x, x_adv):
     """
     Return the L0 'norm' over a batch of inputs as a float,
     normalized by the number of elements in the array
     """
-    return norm(x, x_adv, 0)
+    return [(_snr_slider_min(x_i, x_adv_i)) for (x_i, x_adv_i) in zip(x, x_adv)] 
 
 
 def _snr(x_i, x_adv_i):
@@ -141,9 +163,85 @@ def _snr(x_i, x_adv_i):
     x_adv_i = np.asarray(x_adv_i, dtype=dtype)
     if x_i.shape != x_adv_i.shape:
         raise ValueError(f"x_i.shape {x_i.shape} != x_adv_i.shape {x_adv_i.shape}")
+    np.concatenate
     signal_power = (np.abs(x_i) ** 2).mean()
     noise_power = (np.abs(x_i - x_adv_i) ** 2).mean()
     return signal_power / noise_power
+
+def _snr_min(x_i, x_adv_i):
+    assert not (
+        np.iscomplexobj(x_i) ^ np.iscomplexobj(x_adv_i)
+    ), "x_i and x_adv_i mix real/complex types"
+    dtype = complex if np.iscomplexobj(x_i) else float
+    x_i = np.asarray(x_i, dtype=dtype)
+    x_adv_i = np.asarray(x_adv_i, dtype=dtype)
+    if x_i.shape != x_adv_i.shape:
+        raise ValueError(f"x_i.shape {x_i.shape} != x_adv_i.shape {x_adv_i.shape}")
+    np.concatenate
+    signal_power = (np.abs(x_i) ** 2).min()
+    noise_power = (np.abs(x_i - x_adv_i) ** 2).min()
+    return 10 * np.log10(signal_power / noise_power)
+    
+def _snr_slider(x_i, x_adv_i):
+    assert not (
+        np.iscomplexobj(x_i) ^ np.iscomplexobj(x_adv_i)
+    ), "x_i and x_adv_i mix real/complex types"
+    dtype = complex if np.iscomplexobj(x_i) else float
+    x_i = np.asarray(x_i, dtype=dtype)
+    x_adv_i = np.asarray(x_adv_i, dtype=dtype)
+    if x_i.shape != x_adv_i.shape:
+        raise ValueError(f"x_i.shape {x_i.shape} != x_adv_i.shape {x_adv_i.shape}")
+    np.concatenate
+    signal_power = (np.abs(x_i) ** 2)
+    noise_power = (np.abs(x_i - x_adv_i) ** 2)
+    adv_signal = np.divide(signal_power,noise_power)
+    bucket_size = 500
+    overlap_count = 1
+    slider = Slider(bucket_size,overlap_count,np.array)
+    adv_signal[adv_signal != np.array(None)]
+    np.nan_to_num(adv_signal,np.finfo(adv_signal.dtype).max)
+    slider.fit(adv_signal) 
+    snr_window = np.array([])
+    db  = 0
+    while True:
+        window_data = slider.slide()
+        window_min = np.nanmin(window_data[window_data != -np.inf])
+        snr_window = np.append(snr_window, db)
+        if slider.reached_end_of_list(): break
+    return snr_window.tolist()
+
+def _snr_slider_min(x_i, x_adv_i):
+    assert not (
+        np.iscomplexobj(x_i) ^ np.iscomplexobj(x_adv_i)
+    ), "x_i and x_adv_i mix real/complex types"
+    dtype = complex if np.iscomplexobj(x_i) else float
+    x_i = np.asarray(x_i, dtype=dtype)
+    x_adv_i = np.asarray(x_adv_i, dtype=dtype)
+    if x_i.shape != x_adv_i.shape:
+        raise ValueError(f"x_i.shape {x_i.shape} != x_adv_i.shape {x_adv_i.shape}")
+    np.concatenate
+    signal_power = (np.abs(x_i) ** 2)
+    noise_power = (np.abs(x_i - x_adv_i) ** 2)
+    adv_signal = np.vstack((signal_power,noise_power))
+    bucket_size = 500
+    overlap_count = 1
+    slider = Slider(bucket_size,overlap_count,np.array)
+    adv_signal[adv_signal != np.array(None)]
+    np.nan_to_num(adv_signal,np.finfo(adv_signal.dtype).max)
+    slider.fit(adv_signal) 
+    snr_window = np.array([])
+    db  = 0
+    while True:
+        window_data = slider.slide()
+        values = np.mean(window_data, axis=1)
+        signal = values[0]
+        noise = values[1]
+        db = 10 * np.log10(signal / noise)
+        snr_window = np.append(snr_window, db)
+        if slider.reached_end_of_list(): break
+    return snr_window.min()
+    
+
 
 
 def snr(x, x_adv):
@@ -152,8 +250,16 @@ def snr(x, x_adv):
     """
     if len(x) != len(x_adv):
         raise ValueError(f"len(x) {len(x)} != len(x_adv) {len(x_adv)}")
+    [(_snr_slider(x_i, x_adv_i)) for (x_i, x_adv_i) in zip(x, x_adv)]
     return [float(_snr(x_i, x_adv_i)) for (x_i, x_adv_i) in zip(x, x_adv)]
 
+def snr_slide(x, x_adv):
+    """
+    Return the SNR of a batch of samples with raw audio input
+    """
+    if len(x) != len(x_adv):
+        raise ValueError(f"len(x) {len(x)} != len(x_adv) {len(x_adv)}")
+    return [float(_snr_slider(x_i, x_adv_i)) for (x_i, x_adv_i) in zip(x, x_adv)]
 
 def snr_db(x, x_adv):
     """
@@ -846,6 +952,7 @@ SUPPORTED_METRICS = {
     "linf": linf,
     "snr": snr,
     "snr_db": snr_db,
+    "window_snr": sliding_snr,
     "snr_spectrogram": snr_spectrogram,
     "snr_spectrogram_db": snr_spectrogram_db,
     "image_circle_patch_diameter": image_circle_patch_diameter,
@@ -1163,3 +1270,4 @@ class MetricsLogger:
             if "stats" in entry:
                 results[f"{name} profiler stats"] = entry["stats"]
         return results
+
